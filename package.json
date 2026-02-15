@@ -1,0 +1,35 @@
+{
+  "name": "openclaw-costguard",
+  "version": "0.1.0",
+  "description": "Cost tracking, budget enforcement, and usage attribution for OpenClaw agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "openclaw-extension",
+    "cost-tracking",
+    "budget",
+    "tokens",
+    "observability"
+  ],
+  "openclaw": {
+    "extensions": {
+      "costguard": {
+        "type": "tool",
+        "entrypoint": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "typescript": "^5.5.0"
+  }
+}
