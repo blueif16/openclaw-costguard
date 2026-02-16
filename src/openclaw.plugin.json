@@ -1,0 +1,17 @@
+{
+  "id": "openclaw-costguard",
+  "name": "openclaw-costguard",
+  "version": "0.1.0",
+  "description": "Cost tracking, budget enforcement, and usage attribution for OpenClaw agents",
+  "entrypoint": "./dist/index.js",
+  "slots": ["tool"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "dailyLimitUsd": { "type": "number" },
+      "monthlyLimitUsd": { "type": "number" },
+      "budgetAction": { "type": "string", "enum": ["warn", "block"] }
+    }
+  }
+}

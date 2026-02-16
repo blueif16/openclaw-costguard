@@ -1,36 +1,46 @@
-import path from "node:path";
-import os from "node:os";
-
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
-const DB_PATH = path.join(OPENCLAW_HOME, "costguard.db");
-
-let db: any;
-let DatabaseSync: any;
-
-export function getDb(): any {
-  if (!db) {
-    // Lazy require: node:sqlite must not be loaded at module-parse time
-    // because the gateway uses jiti which can break native node: imports.
-    if (!DatabaseSync) {
-      DatabaseSync = require("node:sqlite").DatabaseSync;
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getDb = getDb;
+exports.closeDb = closeDb;
+exports.insertUsage = insertUsage;
+exports.getCostSince = getCostSince;
+exports.getCostByModel = getCostByModel;
+exports.getCostBySource = getCostBySource;
+exports.getCostBySession = getCostBySession;
+exports.getSessionTurns = getSessionTurns;
+exports.getCronRunHistory = getCronRunHistory;
+exports.getDailyTotals = getDailyTotals;
+const node_path_1 = __importDefault(require("node:path"));
+const node_os_1 = __importDefault(require("node:os"));
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME || node_path_1.default.join(node_os_1.default.homedir(), ".openclaw");
+const DB_PATH = node_path_1.default.join(OPENCLAW_HOME, "costguard.db");
+let db;
+let DatabaseSync;
+function getDb() {
+    if (!db) {
+        // Lazy require: node:sqlite must not be loaded at module-parse time
+        // because the gateway uses jiti which can break native node: imports.
+        if (!DatabaseSync) {
+            DatabaseSync = require("node:sqlite").DatabaseSync;
+        }
+        db = new DatabaseSync(DB_PATH);
+        db.exec("PRAGMA journal_mode = WAL");
+        db.exec("PRAGMA busy_timeout = 5000");
+        initSchema();
     }
-    db = new DatabaseSync(DB_PATH);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA busy_timeout = 5000");
-    initSchema();
-  }
-  return db;
+    return db;
 }
-
-export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-  }
+function closeDb() {
+    if (db) {
+        db.close();
+        db = null;
+    }
 }
-
-function initSchema(): void {
-  db.exec(`
+function initSchema() {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp INTEGER NOT NULL,
@@ -55,48 +65,16 @@ function initSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_usage_job ON usage(job_id);
   `);
 }
-
-export interface UsageRecord {
-  timestamp: number;
-  sessionKey: string;
-  agentId: string;
-  source: string;
-  jobId: string | null;
-  model: string;
-  provider: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  costUsd: number;
-  durationMs: number;
-}
-
-export function insertUsage(record: UsageRecord): void {
-  const stmt = getDb().prepare(`
+function insertUsage(record) {
+    const stmt = getDb().prepare(`
     INSERT INTO usage (timestamp, session_key, agent_id, source, job_id, model, provider,
       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, duration_ms)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  stmt.run(
-    record.timestamp, record.sessionKey, record.agentId, record.source,
-    record.jobId, record.model, record.provider,
-    record.inputTokens, record.outputTokens, record.cacheReadTokens,
-    record.cacheWriteTokens, record.costUsd, record.durationMs
-  );
+    stmt.run(record.timestamp, record.sessionKey, record.agentId, record.source, record.jobId, record.model, record.provider, record.inputTokens, record.outputTokens, record.cacheReadTokens, record.cacheWriteTokens, record.costUsd, record.durationMs);
 }
-
-// --- Query helpers ---
-
-export interface CostSummary {
-  totalCost: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  invocationCount: number;
-}
-
-export function getCostSince(sinceMs: number): CostSummary {
-  const row = getDb().prepare(`
+function getCostSince(sinceMs) {
+    const row = getDb().prepare(`
     SELECT
       COALESCE(SUM(cost_usd), 0) as totalCost,
       COALESCE(SUM(input_tokens), 0) as totalInputTokens,
@@ -104,11 +82,10 @@ export function getCostSince(sinceMs: number): CostSummary {
       COUNT(*) as invocationCount
     FROM usage WHERE timestamp >= ?
   `).get(sinceMs);
-  return row ?? { totalCost: 0, totalInputTokens: 0, totalOutputTokens: 0, invocationCount: 0 };
+    return row ?? { totalCost: 0, totalInputTokens: 0, totalOutputTokens: 0, invocationCount: 0 };
 }
-
-export function getCostByModel(sinceMs: number): Array<{ model: string } & CostSummary> {
-  return getDb().prepare(`
+function getCostByModel(sinceMs) {
+    return getDb().prepare(`
     SELECT model,
       COALESCE(SUM(cost_usd), 0) as totalCost,
       COALESCE(SUM(input_tokens), 0) as totalInputTokens,
@@ -118,9 +95,8 @@ export function getCostByModel(sinceMs: number): Array<{ model: string } & CostS
     GROUP BY model ORDER BY totalCost DESC
   `).all(sinceMs);
 }
-
-export function getCostBySource(sinceMs: number): Array<{ source: string; job_id: string | null } & CostSummary> {
-  return getDb().prepare(`
+function getCostBySource(sinceMs) {
+    return getDb().prepare(`
     SELECT source, job_id,
       COALESCE(SUM(cost_usd), 0) as totalCost,
       COALESCE(SUM(input_tokens), 0) as totalInputTokens,
@@ -130,9 +106,8 @@ export function getCostBySource(sinceMs: number): Array<{ source: string; job_id
     GROUP BY source, job_id ORDER BY totalCost DESC
   `).all(sinceMs);
 }
-
-export function getCostBySession(sinceMs: number, limit: number = 10): Array<{ session_key: string } & CostSummary> {
-  return getDb().prepare(`
+function getCostBySession(sinceMs, limit = 10) {
+    return getDb().prepare(`
     SELECT session_key,
       COALESCE(SUM(cost_usd), 0) as totalCost,
       COALESCE(SUM(input_tokens), 0) as totalInputTokens,
@@ -142,22 +117,14 @@ export function getCostBySession(sinceMs: number, limit: number = 10): Array<{ s
     GROUP BY session_key ORDER BY totalCost DESC LIMIT ?
   `).all(sinceMs, limit);
 }
-
-export function getSessionTurns(sessionKey: string): Array<{
-  timestamp: number; model: string; input_tokens: number; output_tokens: number;
-  cache_read_tokens: number; cost_usd: number; duration_ms: number;
-}> {
-  return getDb().prepare(`
+function getSessionTurns(sessionKey) {
+    return getDb().prepare(`
     SELECT timestamp, model, input_tokens, output_tokens, cache_read_tokens, cost_usd, duration_ms
     FROM usage WHERE session_key = ? ORDER BY timestamp ASC
   `).all(sessionKey);
 }
-
-export function getCronRunHistory(jobId: string, limit: number = 5): Array<{
-  session_key: string; runCount: number; totalCost: number; totalTokens: number;
-  firstTs: number; lastTs: number;
-}> {
-  return getDb().prepare(`
+function getCronRunHistory(jobId, limit = 5) {
+    return getDb().prepare(`
     SELECT session_key,
       COUNT(*) as runCount,
       COALESCE(SUM(cost_usd), 0) as totalCost,
@@ -167,10 +134,9 @@ export function getCronRunHistory(jobId: string, limit: number = 5): Array<{
     GROUP BY session_key ORDER BY firstTs DESC LIMIT ?
   `).all(jobId, limit);
 }
-
-export function getDailyTotals(days: number = 30): Array<{ date: string; totalCost: number; totalTokens: number }> {
-  const sinceMs = Date.now() - (days * 24 * 60 * 60 * 1000);
-  return getDb().prepare(`
+function getDailyTotals(days = 30) {
+    const sinceMs = Date.now() - (days * 24 * 60 * 60 * 1000);
+    return getDb().prepare(`
     SELECT
       DATE(timestamp / 1000, 'unixepoch', 'localtime') as date,
       COALESCE(SUM(cost_usd), 0) as totalCost,

@@ -1,0 +1,13 @@
+{
+  "id": "costguard",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dailyLimitUsd": { "type": "number" },
+      "monthlyLimitUsd": { "type": "number" },
+      "warnThreshold": { "type": "number", "default": 0.8 },
+      "budgetAction": { "type": "string", "enum": ["warn", "block"] }
+    }
+  }
+}

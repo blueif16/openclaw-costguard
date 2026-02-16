@@ -1,10 +1,8 @@
 export type SourceType = "user" | "cron" | "subagent" | "acp" | "heartbeat";
-
 export interface Attribution {
-  source: SourceType;
-  jobId: string | null;
+    source: SourceType;
+    jobId: string | null;
 }
-
 /**
  * Parse a sessionKey to determine the source of the invocation.
  *
@@ -20,27 +18,4 @@ export interface Attribution {
  * There is no isHeartbeat field on diagnostic events, so heartbeat
  * detection is best-effort only. A core PR would be needed for reliable detection.
  */
-export function parseSessionKey(sessionKey: string): Attribution {
-  // Heartbeat — best-effort, may not match in practice
-  if (sessionKey.includes(":heartbeat")) {
-    return { source: "heartbeat", jobId: null };
-  }
-
-  // Cron job — extract jobId
-  const cronMatch = sessionKey.match(/:cron:([^:]+)/);
-  if (cronMatch) {
-    return { source: "cron", jobId: cronMatch[1] };
-  }
-
-  // Subagent
-  if (sessionKey.includes(":subagent:")) {
-    return { source: "subagent", jobId: null };
-  }
-
-  // ACP
-  if (sessionKey.includes(":acp:")) {
-    return { source: "acp", jobId: null };
-  }
-
-  return { source: "user", jobId: null };
-}
+export declare function parseSessionKey(sessionKey: string): Attribution;
