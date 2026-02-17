@@ -55,7 +55,7 @@ Patched files (in `openclaw/dist/`):
 - `pi-embedded-CWm3BvmA.js`
 - `extensionAPI.js`
 
-> ⚠️ `npm update openclaw` will overwrite these patches. Re-apply after upgrades.
+> `npm update openclaw` will overwrite these patches. Re-apply after upgrades.
 
 ## Pricing
 
@@ -65,7 +65,7 @@ Model name matching: exact match → bare name after stripping path prefixes →
 
 ## Attribution
 
-Session key 自动解析来源类型：
+Session key is automatically parsed into source types:
 
 | Pattern | Source |
 |---|---|
@@ -79,18 +79,18 @@ Session key 自动解析来源类型：
 
 | Command | Description |
 |---|---|
-| `/cost` | 今日费用汇总 |
-| `/cost today\|24h\|week\|month` | 指定时段费用 |
-| `/cost session:<key>` | 逐 turn session 分析（含 context/tool/Δ Context 列、BLOAT 标注、诊断建议） |
-| `/cost session:<key> --compact` | 仅显示 BLOAT 异常 turn |
-| `/cost cron:<jobId> [--last N]` | Cron job 历次运行对比（含 peak ctx 和 growth 倍数） |
-| `/cost top [N]` | 按费用排序的 top sessions |
+| `/cost` | Today's cost summary |
+| `/cost today\|24h\|week\|month` | Cost for a specific time range |
+| `/cost session:<key>` | Per-turn session analysis (context/tool/Δ Context columns, BLOAT flags, diagnostics) |
+| `/cost session:<key> --compact` | Show only BLOAT-flagged turns |
+| `/cost cron:<jobId> [--last N]` | Cron job run-over-run comparison (peak ctx, growth multiplier) |
+| `/cost top [N]` | Top sessions ranked by cost |
 
 ## Budget Enforcement
 
-### 基础配置
+### Basic Configuration
 
-在 `openclaw.json` 的 `plugins.costguard` 中配置：
+Configure in `openclaw.json` under `plugins.costguard`:
 
 ```jsonc
 {
@@ -102,11 +102,11 @@ Session key 自动解析来源类型：
 }
 ```
 
-检查顺序：daily → weekly → monthly，命中即停。
+Check order: daily → weekly → monthly. Stops on first hit.
 
-### 多粒度 Scope 限额
+### Multi-Granularity Scopes
 
-Per-agent / per-cron-job 独立预算，支持通配符：
+Per-agent / per-cron-job independent budgets with wildcard support:
 
 ```jsonc
 {
@@ -119,17 +119,17 @@ Per-agent / per-cron-job 独立预算，支持通配符：
 }
 ```
 
-匹配优先级：精确 scope → 通配符 scope（`cron:*` / `agent:*`）→ 全局限额。
+Match priority: exact scope → wildcard scope (`cron:*` / `agent:*`) → global limit.
 
-### 三级响应
+### Three-Tier Response
 
-| 级别 | 触发条件 | 行为 |
+| Level | Trigger | Behavior |
 |---|---|---|
-| warn | spend ≥ limit × `warnThreshold` | `before_agent_start` 注入警告 context |
-| throttle | spend ≥ limit × `throttleThreshold` | `before_tool_call` 返回 `{ rewriteModel }` 切换到便宜模型 |
-| block | spend ≥ limit | `before_tool_call` 返回 `{ block: true }` 拒绝调用 |
+| warn | spend ≥ limit × `warnThreshold` | Injects warning context via `before_agent_start` |
+| throttle | spend ≥ limit × `throttleThreshold` | `before_tool_call` returns `{ rewriteModel }` to downgrade model |
+| block | spend ≥ limit | `before_tool_call` returns `{ block: true }` to reject the call |
 
-Throttle 配置：
+Throttle configuration:
 
 ```jsonc
 {
@@ -138,22 +138,22 @@ Throttle 配置：
 }
 ```
 
-## Sentinel — 异常检测
+## Sentinel — Anomaly Detection
 
-每次 `model.usage` 事件后自动运行 4 个检测器，告警自动去重（同 detector+session 5 分钟内不重复）。告警发送到配置的 channel，无 channel 时 fallback 到 logger。
+Runs 4 detectors automatically after each `model.usage` event. Alerts are deduplicated (same detector+session suppressed for 5 minutes). Alerts are sent to the configured channel; falls back to logger if no channel is set.
 
-### 检测器
+### Detectors
 
-| 检测器 | 作用 | 关键配置 |
+| Detector | Purpose | Key Config |
 |---|---|---|
-| loopDetection | 检测同一 tool+params 重复调用 | `windowSize`(10), `repeatThreshold`(5) |
-| contextSpike | 检测 context tokens 突增 | `growthPercent`(150), `absoluteMin`(50000) |
-| costVelocity | 检测短时费用飙升（对比 24h 均值） | `windowMinutes`(5), `multiplier`(3) |
-| heartbeatDrift | 检测 cron job 单次费用偏离历史均值 | `lookbackRuns`(10), `driftPercent`(50) |
+| loopDetection | Detects repeated tool+params calls | `windowSize`(10), `repeatThreshold`(5) |
+| contextSpike | Detects sudden context token surges | `growthPercent`(150), `absoluteMin`(50000) |
+| costVelocity | Detects short-term cost spikes vs 24h average | `windowMinutes`(5), `multiplier`(3) |
+| heartbeatDrift | Detects cron job cost deviating from historical average | `lookbackRuns`(10), `driftPercent`(50) |
 
-每个检测器的 `action` 可设为 `"warn"` 或 `"pause"`。`pause` 会将该 session 加入阻断名单。
+Each detector's `action` can be `"warn"` or `"pause"`. `pause` adds the session to the block list.
 
-### Sentinel 配置示例
+### Sentinel Configuration Example
 
 ```jsonc
 {
@@ -167,35 +167,35 @@ Throttle 配置：
 }
 ```
 
-## Session Report 诊断
+## Session Report Diagnostics
 
-`/cost session:<key>` 输出包含：
+`/cost session:<key>` output includes:
 
-- 逐 turn 表格：序号、时间、费用、Context tokens、Model、Tool name、Δ Context 变化百分比
-- BLOAT 自动标注：单 turn context 增长 ≥100% 且绝对增量 ≥50K tokens 时标记 `⚠ BLOAT`
-- 4 种诊断建议：
-  - 大文件 tool output 导致 context 膨胀（Write/bash/readFile）
-  - Web search 结果撑大 context
-  - 连续 3+ turn context 持续增长 → 建议 `/compact`
-  - Session 接近 context limit（>200K tokens）
-- `--compact` 模式：仅显示 BLOAT turn，快速定位问题
+- Per-turn table: index, timestamp, cost, context tokens, model, tool name, Δ Context change %
+- Auto BLOAT flagging: marks `⚠ BLOAT` when a single turn's context grows ≥100% and absolute delta ≥50K tokens
+- 4 diagnostic hints:
+  - Large tool output inflating context (Write/bash/readFile)
+  - Web search results bloating context
+  - 3+ consecutive turns of context growth → suggests `/compact`
+  - Session approaching context limit (>200K tokens)
+- `--compact` mode: shows only BLOAT turns for quick triage
 
 ## DB Schema
 
-SQLite 存储于 `~/.openclaw/costguard.db`，WAL 模式。
+SQLite stored at `~/.openclaw/costguard.db`, WAL mode.
 
-核心字段：`timestamp`, `session_key`, `agent_id`, `source`, `job_id`, `model`, `provider`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `duration_ms`, `context_tokens`, `tool_name`, `tool_params_hash`
+Core columns: `timestamp`, `session_key`, `agent_id`, `source`, `job_id`, `model`, `provider`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost_usd`, `duration_ms`, `context_tokens`, `tool_name`, `tool_params_hash`
 
-旧库自动迁移：启动时检测缺失列（`context_tokens`, `tool_name`, `tool_params_hash`），通过 `ALTER TABLE` 补齐。
+Auto-migration on startup: detects missing columns (`context_tokens`, `tool_name`, `tool_params_hash`) and adds them via `ALTER TABLE`.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `src/index.ts` | Plugin entry, service registration, bridge subscription, hook 集成 |
+| `src/index.ts` | Plugin entry, service registration, bridge subscription, hook integration |
 | `src/pricing.ts` | LiteLLM fetch, cache, fuzzy match, cost calculation |
 | `src/db.ts` | SQLite schema, auto-migration, insert, query helpers |
 | `src/attribution.ts` | Session key → source type (user/cron/subagent/acp) |
-| `src/budget.ts` | 多粒度 scope 解析, weekly window, 三级响应 (warn/throttle/block) |
-| `src/formatter.ts` | `/cost` 报表格式化, session autopsy, cron report, diagnostics |
-| `src/sentinel.ts` | 4 检测器, 告警去重, channel/logger fallback |
+| `src/budget.ts` | Multi-granularity scope resolution, weekly window, three-tier response (warn/throttle/block) |
+| `src/formatter.ts` | `/cost` report formatting, session autopsy, cron report, diagnostics |
+| `src/sentinel.ts` | 4 detectors, alert deduplication, channel/logger fallback |
