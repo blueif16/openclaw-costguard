@@ -14,6 +14,9 @@ export interface UsageRecord {
     cacheWriteTokens: number;
     costUsd: number;
     durationMs: number;
+    contextTokens?: number;
+    toolName?: string;
+    toolParamsHash?: string;
 }
 export declare function insertUsage(record: UsageRecord): void;
 export interface CostSummary {
@@ -41,6 +44,12 @@ export declare function getSessionTurns(sessionKey: string): Array<{
     cache_read_tokens: number;
     cost_usd: number;
     duration_ms: number;
+    context_tokens: number;
+    tool_name: string;
+}>;
+export declare function getRecentToolCalls(sessionKey: string, windowSize: number): Array<{
+    tool_name: string;
+    tool_params_hash: string;
 }>;
 export declare function getCronRunHistory(jobId: string, limit?: number): Array<{
     session_key: string;
@@ -55,3 +64,18 @@ export declare function getDailyTotals(days?: number): Array<{
     totalCost: number;
     totalTokens: number;
 }>;
+export declare function getCostSinceForScope(sinceMs: number, scopeFilter: {
+    agentId?: string;
+    jobId?: string;
+}): CostSummary;
+export declare function getCronRunContextStats(jobId: string, limit?: number): Array<{
+    session_key: string;
+    runCount: number;
+    totalCost: number;
+    totalTokens: number;
+    firstTs: number;
+    lastTs: number;
+    minContext: number;
+    maxContext: number;
+}>;
+export declare function getCostInWindow(sinceMs: number, untilMs: number): number;

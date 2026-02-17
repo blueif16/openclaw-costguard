@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { estimateCost, refreshPricing } from "./pricing.js";
 import { insertUsage, closeDb } from "./db.js";
 import { parseSessionKey } from "./attribution.js";
 import { checkBudget, type BudgetConfig } from "./budget.js";
 import { formatCostReport, formatSessionReport, formatCronReport, formatTopSessions } from "./formatter.js";
+import { checkAfterEvent, sendAlert, type SentinelConfig } from "./sentinel.js";
 
 interface PluginApi {
   pluginConfig?: Record<string, any>;
@@ -13,6 +15,7 @@ interface PluginApi {
 }
 
 let budgetConfig: BudgetConfig;
+let sentinelConfig: SentinelConfig;
 let lastBudgetCheck: { level: string; message: string } = { level: "ok", message: "" };
 
 const plugin = {
@@ -24,10 +27,16 @@ const plugin = {
     const cfg = api.pluginConfig ?? {};
     budgetConfig = {
       dailyLimitUsd: cfg.dailyLimitUsd,
+      weeklyLimitUsd: cfg.weeklyLimitUsd,
       monthlyLimitUsd: cfg.monthlyLimitUsd,
       warnThreshold: cfg.warnThreshold ?? 0.8,
+      throttleThreshold: cfg.throttleThreshold,
+      throttleFallbackModel: cfg.throttleFallbackModel,
       action: cfg.budgetAction ?? "warn",
+      scopes: cfg.scopes,
     };
+
+    sentinelConfig = cfg.sentinel ?? {};
 
     // --- Service: diagnostic event listener + SQLite ---
     api.registerService({
@@ -64,6 +73,14 @@ const plugin = {
               ctx.logger?.info?.(`costguard: ${model} → matched pricing: ${estimated.matchedModel}`);
             }
 
+            // PRD-01: extract context_tokens, tool_name, tool_params_hash
+            const contextTokens = evt.contextTokens ?? evt.context?.tokens ?? 0;
+            const toolName = evt.toolName ?? evt.tool?.name ?? '';
+            const rawParams = evt.toolParams ?? evt.tool?.params;
+            const toolParamsHash = rawParams
+              ? createHash("sha256").update(JSON.stringify(rawParams)).digest("hex").slice(0, 16)
+              : '';
+
             insertUsage({
               timestamp: Date.now(),
               sessionKey,
@@ -78,11 +95,32 @@ const plugin = {
               cacheWriteTokens: cacheWrite,
               costUsd,
               durationMs: evt.durationMs ?? 0,
+              contextTokens,
+              toolName,
+              toolParamsHash,
             });
 
-            lastBudgetCheck = checkBudget(budgetConfig);
+            lastBudgetCheck = checkBudget(budgetConfig, sessionKey, jobId);
             if (lastBudgetCheck.level !== "ok") {
               ctx.logger?.warn?.(`costguard: ${lastBudgetCheck.message}`);
+            }
+
+            // PRD-03: Sentinel anomaly detection
+            const record = {
+              timestamp: Date.now(), sessionKey, agentId: evt.agentId ?? "unknown",
+              source, jobId, model, provider: evt.provider ?? "unknown",
+              inputTokens: inTokens, outputTokens: outTokens,
+              cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
+              costUsd, durationMs: evt.durationMs ?? 0,
+              contextTokens, toolName, toolParamsHash,
+            };
+            const alerts = checkAfterEvent(record, sentinelConfig);
+            for (const alert of alerts) {
+              sendAlert(alert, sentinelConfig.alertChannel, ctx);
+              if (alert.action === "pause") {
+                (ctx as any)._costguardSessionBlocked ??= new Set();
+                (ctx as any)._costguardSessionBlocked.add(alert.sessionKey);
+              }
             }
           } catch (err) {
             ctx.logger?.error?.("costguard: failed to record usage", err);
@@ -100,23 +138,31 @@ const plugin = {
       },
     });
 
-    // --- Hook: before_tool_call — budget enforcement ---
+    // --- Hook: before_tool_call — budget enforcement (block + throttle) ---
     if (budgetConfig.action === "block") {
-      api.registerHook("before_tool_call", (_event: any, _ctx: any) => {
-        const check = checkBudget(budgetConfig);
-        if (check.level === "exceeded") {
-          return { block: true, blockReason: check.message };
+      api.registerHook("before_tool_call", (event: any, _ctx: any) => {
+        const sk = event?.sessionKey ?? "";
+        const jid = event?.jobId ?? null;
+        const result = checkBudget(budgetConfig, sk, jid);
+        if (result.level === "exceeded") {
+          return { block: true, blockReason: result.message };
+        }
+        if (result.level === "throttle" && result.fallbackModel) {
+          return { rewriteModel: result.fallbackModel };
         }
       }, { name: "costguard:budget-block" });
     }
 
     // --- Hook: before_agent_start — budget warning injection ---
-    api.registerHook("before_agent_start", (_event: any, _ctx: any) => {
-      if (lastBudgetCheck.level === "warning") {
-        return { prependContext: `[CostGuard Warning] ${lastBudgetCheck.message}` };
+    api.registerHook("before_agent_start", (event: any, _ctx: any) => {
+      const sk = event?.sessionKey ?? "";
+      const jid = event?.jobId ?? null;
+      const result = checkBudget(budgetConfig, sk, jid);
+      if (result.level === "warning" || result.level === "throttle") {
+        return { prependContext: `[CostGuard Warning] ${result.message}` };
       }
-      if (lastBudgetCheck.level === "exceeded") {
-        return { prependContext: `[CostGuard Alert] ${lastBudgetCheck.message}` };
+      if (result.level === "exceeded") {
+        return { prependContext: `[CostGuard Alert] ${result.message}` };
       }
     }, { name: "costguard:budget-warn" });
 
@@ -139,9 +185,12 @@ const plugin = {
 function routeCostCommand(args: string): string {
   if (!args) return formatCostReport("today");
 
-  // /cost session:<key>
+  // /cost session:<key> [--compact]
   if (args.startsWith("session:")) {
-    return formatSessionReport(args.slice(8));
+    const parts = args.split(/\s+/);
+    const key = parts[0].slice(8);
+    const compact = parts.includes("--compact");
+    return formatSessionReport(key, compact);
   }
 
   // /cost cron:<jobId> [--last N]

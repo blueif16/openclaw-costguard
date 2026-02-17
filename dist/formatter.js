@@ -34,7 +34,7 @@ function timeRange(label) {
         default: return now - 24 * 60 * 60 * 1000;
     }
 }
-/** /cost [today|24h|week|month] — period summary */
+/** /cost [today|24h|week|month] */
 function formatCostReport(period = "today") {
     const sinceMs = timeRange(period);
     const summary = (0, db_js_1.getCostSince)(sinceMs);
@@ -48,9 +48,8 @@ function formatCostReport(period = "today") {
     lines.push("");
     if (byModel.length > 0) {
         lines.push("By model:");
-        for (const row of byModel) {
+        for (const row of byModel)
             lines.push(`  ${row.model}: ${formatUsd(row.totalCost)} (${row.invocationCount} calls)`);
-        }
         lines.push("");
     }
     if (bySource.length > 0) {
@@ -62,35 +61,125 @@ function formatCostReport(period = "today") {
     }
     return lines.join("\n");
 }
-/** /cost session:<key> — turn-by-turn autopsy */
-function formatSessionReport(sessionKey) {
+// --- PRD-04: Bloat detection constants ---
+const BLOAT_GROWTH_PERCENT = 100;
+const BLOAT_ABSOLUTE_MIN = 50_000;
+const SHOW_DELTA_PERCENT = 50;
+function generateDiagnostics(diags, lastCtx) {
+    const suggestions = [];
+    for (const d of diags) {
+        if (d.absDelta > 100_000 && ["Write", "bash", "readFile"].includes(d.tool)) {
+            suggestions.push(`Turn ${d.index}: context jumped +${formatTokens(d.absDelta)} tokens. Likely cause: large tool output persisted to session.`);
+        }
+        else if (d.absDelta > 100_000 && d.tool === "web_search") {
+            suggestions.push(`Turn ${d.index}: context jumped +${formatTokens(d.absDelta)} tokens. Likely cause: web search result expanded context.`);
+        }
+    }
+    // Consecutive growth check
+    let streak = 0;
+    for (const d of diags) {
+        streak = d.deltaPercent > 0 ? streak + 1 : 0;
+    }
+    if (streak >= 3)
+        suggestions.push("Context compounding detected — consider /compact");
+    if (lastCtx > 200_000)
+        suggestions.push("Session approaching context limit");
+    return suggestions;
+}
+/** /cost session:<key> [--compact] — turn-by-turn autopsy with context analysis */
+function formatSessionReport(sessionKey, compact) {
     const turns = (0, db_js_1.getSessionTurns)(sessionKey);
     if (turns.length === 0)
         return `No data for session: ${sessionKey}`;
-    const lines = [];
-    lines.push(`Session Autopsy — ${sessionKey}`);
-    lines.push("");
-    let cumCost = 0;
-    for (const t of turns) {
-        cumCost += t.cost_usd;
-        const ts = new Date(t.timestamp).toLocaleTimeString();
-        lines.push(`  ${ts}  ${t.model}  ${formatTokens(t.input_tokens)}in/${formatTokens(t.output_tokens)}out  ${formatUsd(t.cost_usd)}  (cum: ${formatUsd(cumCost)})  ${t.duration_ms}ms`);
+    const hasContext = turns.some(t => t.context_tokens > 0);
+    const hasTool = turns.some(t => t.tool_name !== '');
+    // Compute per-turn diagnostics
+    const diags = [];
+    for (let i = 1; i < turns.length; i++) {
+        const prev = turns[i - 1].context_tokens;
+        const cur = turns[i].context_tokens;
+        if (!hasContext || prev === 0)
+            continue;
+        const absDelta = cur - prev;
+        const deltaPercent = (absDelta / prev) * 100;
+        const isBloat = deltaPercent >= BLOAT_GROWTH_PERCENT && absDelta >= BLOAT_ABSOLUTE_MIN;
+        diags.push({ index: i + 1, deltaPercent, absDelta, isBloat, tool: turns[i].tool_name });
     }
+    const lines = [];
+    lines.push(`Session: ${sessionKey}`);
+    lines.push("");
+    // Header
+    let header = "  #   Time      Cost    ";
+    if (hasContext)
+        header += "  Ctx     ";
+    header += "  Model";
+    if (hasTool)
+        header += "                     Tool";
+    if (hasContext)
+        header += "           Δ Context";
+    lines.push(header);
+    let cumCost = 0;
+    for (let i = 0; i < turns.length; i++) {
+        const t = turns[i];
+        cumCost += t.cost_usd;
+        const ts = new Date(t.timestamp).toLocaleTimeString("en-US", { hour12: false });
+        const diag = diags.find(d => d.index === i + 1);
+        if (compact && !(diag?.isBloat))
+            continue;
+        let line = `  ${String(i + 1).padStart(2)}  ${ts}  ${formatUsd(t.cost_usd)}`;
+        if (hasContext)
+            line += `  ${formatTokens(t.context_tokens).padStart(6)}`;
+        line += `  ${t.model}`;
+        if (hasTool)
+            line += `  ${(t.tool_name || '').padEnd(15)}`;
+        if (diag && hasContext) {
+            const pct = `+${diag.deltaPercent.toFixed(0)}%`;
+            line += ` ${pct}`;
+            if (diag.isBloat)
+                line += " ⚠ BLOAT";
+        }
+        lines.push(line);
+    }
+    // Summary
     lines.push("");
     lines.push(`Total: ${formatUsd(cumCost)} across ${turns.length} turns`);
+    if (hasContext) {
+        const first = turns[0].context_tokens;
+        const last = turns[turns.length - 1].context_tokens;
+        const growth = first > 0 ? (last / first).toFixed(1) : "N/A";
+        lines.push(`Context: ${formatTokens(first)} → ${formatTokens(last)} (${growth}× growth)`);
+    }
+    // Diagnostics
+    if (hasContext) {
+        const suggestions = generateDiagnostics(diags, turns[turns.length - 1].context_tokens);
+        if (suggestions.length > 0) {
+            lines.push("");
+            for (const s of suggestions)
+                lines.push(`⚠ ${s}`);
+        }
+        else if (compact) {
+            lines.push("No anomalies detected");
+        }
+    }
     return lines.join("\n");
 }
-/** /cost cron:<jobId> [--last N] — cron run comparison */
+/** /cost cron:<jobId> [--last N] — cron run comparison with context stats */
 function formatCronReport(jobId, lastN = 5) {
-    const runs = (0, db_js_1.getCronRunHistory)(jobId, lastN);
-    if (runs.length === 0)
+    const stats = (0, db_js_1.getCronRunContextStats)(jobId, lastN);
+    if (stats.length === 0)
         return `No data for cron job: ${jobId}`;
+    const hasContext = stats.some(r => r.maxContext > 0);
     const lines = [];
-    lines.push(`Cron Job — ${jobId} (last ${runs.length} runs)`);
+    lines.push(`Cron Job — ${jobId} (last ${stats.length} runs)`);
     lines.push("");
-    for (const r of runs) {
+    for (const r of stats) {
         const start = new Date(r.firstTs).toLocaleString();
-        lines.push(`  ${start}  ${r.runCount} calls  ${formatUsd(r.totalCost)}  ${formatTokens(r.totalTokens)} tokens`);
+        let line = `  ${start}  ${r.runCount} calls  ${formatUsd(r.totalCost)}  ${formatTokens(r.totalTokens)} tokens`;
+        if (hasContext) {
+            const growth = r.minContext > 0 ? (r.maxContext / r.minContext).toFixed(1) : "N/A";
+            line += `  ${formatTokens(r.maxContext)} peak ctx  ${growth}× growth`;
+        }
+        lines.push(line);
     }
     return lines.join("\n");
 }
